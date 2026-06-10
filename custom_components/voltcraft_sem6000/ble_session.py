@@ -257,30 +257,27 @@ class BLESessionManager:
         sender: BleakGATTCharacteristic,
         data: bytearray,
     ) -> None:
-        # --- Auth / PIN-change response (command 0x17) ---
+        # --- Auth / PIN response (command 0x17) ---
+        # Structure: 0F 06 17 00 [status] [sub] 00 [checksum] FF FF
+        #   status: 0x00 = success, else fail
+        #   sub:    0x00 = auth, 0x01 = change PIN, 0x02 = reset PIN
         if data.startswith(b"\x0F\x06\x17"):
-            sub = data[4]   # 0x00 = auth, 0x01 = change PIN, 0x02 = reset PIN
-            status = data[5] if len(data) > 5 else data[4]
+            status = data[4]
+            sub    = data[5]
 
             if sub == 0x00:
-                # Auth response
-                success = data[4] == 0x00
+                success = status == 0x00
                 if not success:
-                    _LOGGER.warning("Auth response: FAILED (status=0x%02X)", data[4])
+                    _LOGGER.warning("Auth response: FAILED (status=0x%02X)", status)
                 if self._pending_auth_future and not self._pending_auth_future.done():
                     self._pending_auth_future.set_result(success)
 
-            elif sub == 0x01:
-                # Change PIN response: data[5] = 0x00 success, else fail
-                success = data[5] == 0x00 if len(data) > 5 else False
-                result = "success" if success else "wrong_pin"
-                _LOGGER.debug("Change PIN response: %s", result)
+            elif sub in (0x01, 0x02):
+                # Change PIN (0x01) or Reset PIN (0x02)
+                result = "success" if status == 0x00 else "wrong_pin"
+                _LOGGER.debug("PIN command sub=0x%02X response: %s", sub, result)
                 if self._pending_change_pin_future and not self._pending_change_pin_future.done():
                     self._pending_change_pin_future.set_result(result)
-
-            elif sub == 0x02:
-                # Reset PIN response
-                _LOGGER.debug("Reset PIN response: success=%s", data[5] == 0x00 if len(data) > 5 else "?")
 
             return
 
