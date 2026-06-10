@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Voltcraft SEM6000",
+        "description": "Select a discovered device.",
+        "data": {
+          "mac": "Device"
+        }
+      },
+      "pin": {
+        "title": "PIN",
+        "description": "Enter the PIN for your device (default: 0000).",
+        "data": {
+          "pin": "PIN"
+        }
+      },
+      "confirm": {
+        "description": "[%key:common::config_flow::description::confirm_setup%]"
+      }
+    },
+    "abort": {
+      "no_devices_found": "[%key:common::config_flow::abort::no_devices_found%]",
+      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
+    },
+    "error": {
+      "invalid_pin": "Invalid PIN. Must be exactly 4 digits."
+    }
+  }
+}

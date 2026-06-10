@@ -1,0 +1,11 @@
+from datetime import timedelta
+
+DOMAIN = "voltcraft_sem6000"
+DEVICE_NAME = "Voltcraft SEM6000"
+
+SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb"
+COMMAND_UUID = "0000fff3-0000-1000-8000-00805f9b34fb"
+NOTIFY_UUID = "0000fff4-0000-1000-8000-00805f9b34fb"
+
+# Polling interval for sensor updates
+SCAN_INTERVAL = timedelta(seconds=5)

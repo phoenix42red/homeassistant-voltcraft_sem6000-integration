@@ -1,0 +1,25 @@
+{
+  "domain": "voltcraft_sem6000",
+  "name": "Voltcraft SEM6000",
+  "bluetooth": [
+    {
+      "service_uuid": "0000fff0-0000-1000-8000-00805f9b34fb",
+      "connectable": true
+    }
+  ],
+  "codeowners": [
+    "@phoenix42red"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "bluetooth"
+  ],
+  "documentation": "https://github.com/phoenix42red-homeassistant-voltcraft_sem6000-integration",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/phoenix42red-homeassistant-voltcraft_sem6000-integration/issues",
+  "requirements": [
+    "bleak-retry-connector>=3.0.0"
+  ],
+  "version": "1.0.0"
+}
