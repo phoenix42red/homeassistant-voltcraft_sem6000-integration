@@ -101,6 +101,7 @@ class BLESessionManager:
         self._reconnect_task: asyncio.Task | None = None
         self._shutdown = False
         self._switch_pending_state: bool | None = None  # desired is_on while waiting for SwitchACK
+        self._pending_change_pin_future: asyncio.Future[str] | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -256,14 +257,31 @@ class BLESessionManager:
         sender: BleakGATTCharacteristic,
         data: bytearray,
     ) -> None:
-        # --- Auth response ---
+        # --- Auth / PIN-change response (command 0x17) ---
         if data.startswith(b"\x0F\x06\x17"):
-            status = data[4]
-            success = status == 0x00
-            if not success:
-                _LOGGER.warning("Auth response: FAILED (status=0x%02X)", status)
-            if self._pending_auth_future and not self._pending_auth_future.done():
-                self._pending_auth_future.set_result(success)
+            sub = data[4]   # 0x00 = auth, 0x01 = change PIN, 0x02 = reset PIN
+            status = data[5] if len(data) > 5 else data[4]
+
+            if sub == 0x00:
+                # Auth response
+                success = data[4] == 0x00
+                if not success:
+                    _LOGGER.warning("Auth response: FAILED (status=0x%02X)", data[4])
+                if self._pending_auth_future and not self._pending_auth_future.done():
+                    self._pending_auth_future.set_result(success)
+
+            elif sub == 0x01:
+                # Change PIN response: data[5] = 0x00 success, else fail
+                success = data[5] == 0x00 if len(data) > 5 else False
+                result = "success" if success else "wrong_pin"
+                _LOGGER.debug("Change PIN response: %s", result)
+                if self._pending_change_pin_future and not self._pending_change_pin_future.done():
+                    self._pending_change_pin_future.set_result(result)
+
+            elif sub == 0x02:
+                # Reset PIN response
+                _LOGGER.debug("Reset PIN response: success=%s", data[5] == 0x00 if len(data) > 5 else "?")
+
             return
 
         # --- Parsed payload ---
