@@ -72,7 +72,7 @@ The device supports additional features (commands), which I don't plan to suppor
 
 ### Device Discovery
 
-The Home Assistant should automatically discover Voltcraft SEM6000 devices via Bluetooth. Make sure:
+Home Assistant should automatically discover Voltcraft SEM6000 devices via Bluetooth. Make sure:
 - Bluetooth integration is enabled
 - The device is powered on
 - The device is within Bluetooth range of your Home Assistant host
