@@ -26,5 +26,22 @@
     "error": {
       "invalid_pin": "Invalid PIN. Must be exactly 4 digits."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Change PIN",
+        "description": "Enter the current PIN and the new PIN.",
+        "data": {
+          "old_pin": "Current PIN",
+          "new_pin": "New PIN"
+        }
+      }
+    },
+    "error": {
+      "invalid_pin": "Invalid PIN. Must be exactly 4 digits.",
+      "wrong_pin": "Current PIN is incorrect.",
+      "pin_change_timeout": "No response from device. Is it connected?"
+    }
   }
 }
