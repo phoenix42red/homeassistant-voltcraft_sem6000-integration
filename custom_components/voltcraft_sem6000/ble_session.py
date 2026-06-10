@@ -270,8 +270,8 @@ class BLESessionManager:
             self._fire_callbacks()
 
         elif isinstance(payload, SwitchNotifyPayload):
-            # Switch state changed — request a fresh MEASURE
-            # We don't know the new state yet; coordinator will poll
+            # Update is_on immediately from the switch notify — no need to wait for MEASURE
+            self.notify_state.is_on = payload.is_on
             self._fire_callbacks()
 
         else:
