@@ -1,5 +1,5 @@
 """
-Options Flow for Voltcraft SEM6000
+Options Flow for Voltcraft SEM6000 / SPB012BLE.
 
 Allows changing the device PIN from HA Settings → Integration → Configure.
 On success: sends the change-PIN command, waits for ACK, saves new PIN to config entry.
@@ -36,11 +36,11 @@ def _build_change_pin_payload(old_pin: str, new_pin: str) -> bytes:
     old_bytes = _encode_pin(old_pin)
     new_bytes = _encode_pin(new_pin)
 
+    # Verified against HCI log: 0F 0C 17 00 01 [new 4] [old 4] [checksum] FF FF
     payload = bytearray([
         0x0F, 0x0C, 0x17, 0x00, 0x01,
         *new_bytes,
         *old_bytes,
-        0x00, 0x00, 0x00, 0x00,
     ])
 
     checksum = (sum(payload[2:]) + 1) % 256
