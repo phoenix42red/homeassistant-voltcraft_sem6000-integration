@@ -7,8 +7,10 @@ A Home Assistant custom component integration for **Voltcraft SEM6000** Bluetoot
 ## Currently Supported
 
 - Password protection
-- Turn LED on/off
-- Turn outlet on/off
+- Change PIN (Settings → Integration → Configure)
+- Reset PIN to 0000 (Button-Entity)
+- Turn LED on/off (Button-Entities)
+- Turn outlet on/off (Switch-Entity)
 - Monitor outlet state (on/off)
 - Automatic Discovery
 - Real-time sensor monitoring (updated every 5 seconds):
@@ -53,7 +55,7 @@ The device supports additional features (commands), which I don't plan to suppor
 4. Add this repository URL: `https://github.com/phoenix42red-homeassistant-voltcraft_sem6000`
 5. Select **Integration** as the category
 6. Click **Add**
-7. Find "Voltcraft SEM6000 / SPB012BLE v2" in the integration list and click **Download**
+7. Find "Voltcraft SEM6000" in the integration list and click **Download**
 8. Restart Home Assistant
 
 ### Manual Installation
@@ -70,7 +72,7 @@ The device supports additional features (commands), which I don't plan to suppor
 
 ### Device Discovery
 
-The Home Assistant should automatically discover Voltcraft SEM6000 and SPB012BLE devices via Bluetooth. Make sure:
+The Home Assistant should automatically discover Voltcraft SEM6000 devices via Bluetooth. Make sure:
 - Bluetooth integration is enabled
 - The device is powered on
 - The device is within Bluetooth range of your Home Assistant host
@@ -82,7 +84,7 @@ If the device is found, it will appear in the integration list under **Devices &
 1. Ensure your Voltcraft SEM6000 device is powered on and within Bluetooth range
 2. In Home Assistant, go to **Settings** → **Devices & Services**
 3. Click **+ Add Integration**
-4. Search for "Voltcraft SEM6000 v2"
+4. Search for "Voltcraft SEM6000"
 5. Select your device from the list of discovered Bluetooth devices
 6. Confirm the device selection
 7. The integration will create a switch entity for your power plug
@@ -143,7 +145,7 @@ To enable debug logging for troubleshooting, add the following to your `configur
 logger:
   default: info
   logs:
-    custom_components.voltcraft_sem6000_spb012ble: debug
+    custom_components.voltcraft_sem6000: debug
 ```
 
 Then restart Home Assistant.
