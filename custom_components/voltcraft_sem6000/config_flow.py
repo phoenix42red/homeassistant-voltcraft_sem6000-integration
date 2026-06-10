@@ -12,9 +12,10 @@ from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_discovered_service_info,
 )
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult
 
 from .const import DOMAIN, DEVICE_NAME, SERVICE_UUID
+from .options_flow import VoltcraftOptionsFlow
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,6 +24,10 @@ CONF_PIN = "pin"
 
 class MainConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
+
+    @staticmethod
+    def async_get_options_flow(config_entry: ConfigEntry) -> VoltcraftOptionsFlow:
+        return VoltcraftOptionsFlow(config_entry)
 
     def __init__(self) -> None:
         super().__init__()
