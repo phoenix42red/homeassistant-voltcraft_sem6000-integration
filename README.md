@@ -160,8 +160,9 @@ Contributions are welcome! Please feel free to submit a Pull Request or open an 
 
 ## Credits
 
-- Protocol reverse-engineered by monitoring the official Android app and ravaging through other public repositories
-- Inspiration taken from [here](https://github.com/Anty0/homeassistant-voltcraft_sem6000_spb012ble-integration)
+- Protocol reverse-engineered by monitoring the official Android app and rifle through other public repositories
+- Based on integration from [Anty0](https://github.com/Anty0/homeassistant-voltcraft_sem6000_spb012ble-integration) 
+- Based on API documentation from [Heckie75](https://github.com/Heckie75/voltcraft-sem-6000)
 
 ## License
 
