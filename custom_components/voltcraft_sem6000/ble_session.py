@@ -56,13 +56,14 @@ class NotifyState:
     power_factor: float | None = None
     consumed_energy: float | None = None
 
-    def update_from_measure(self, payload: MeasureNotifyPayload) -> None:
+    def update_from_measure(self, payload: MeasureNotifyPayload, skip_is_on: bool = False) -> None:
         power = payload.power / 1000.0
         voltage = float(payload.voltage)
         current = payload.current / 1000.0
         apparent = voltage * current
 
-        self.is_on = payload.is_on
+        if not skip_is_on:
+            self.is_on = payload.is_on
         self.power = power
         self.voltage = voltage
         self.current = current
@@ -99,6 +100,7 @@ class BLESessionManager:
 
         self._reconnect_task: asyncio.Task | None = None
         self._shutdown = False
+        self._switch_pending = False  # True while waiting for SwitchNotify to confirm
 
     # ------------------------------------------------------------------
     # Public API
@@ -139,10 +141,12 @@ class BLESessionManager:
 
         await self._disconnect_client()
 
-    async def async_write_command(self, data: bytes | bytearray) -> None:
+    async def async_write_command(self, data: bytes | bytearray, is_switch: bool = False) -> None:
         """Write a GATT command. Raises BleakError if not connected."""
         if not self.is_connected:
             raise BleakError("Not connected")
+        if is_switch:
+            self._switch_pending = True
         await self._client.write_gatt_char(COMMAND_UUID, data, response=False)
 
     # ------------------------------------------------------------------
@@ -266,11 +270,12 @@ class BLESessionManager:
         payload: ParsedNotifyPayload | None = NotifyPayload.from_payload(data)
 
         if isinstance(payload, MeasureNotifyPayload):
-            self.notify_state.update_from_measure(payload)
+            self.notify_state.update_from_measure(payload, skip_is_on=self._switch_pending)
             self._fire_callbacks()
 
         elif isinstance(payload, SwitchNotifyPayload):
-            # Update is_on immediately from the switch notify — no need to wait for MEASURE
+            # SwitchNotify is authoritative — clear pending flag and update is_on
+            self._switch_pending = False
             self.notify_state.is_on = payload.is_on
             self._fire_callbacks()
 
