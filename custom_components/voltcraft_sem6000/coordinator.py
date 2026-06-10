@@ -81,13 +81,13 @@ class VoltcraftDataUpdateCoordinator(DataUpdateCoordinator[NotifyState | None]):
     # Commands (delegated to session)
     # ------------------------------------------------------------------
 
-    async def async_send_switch_command(self, payload: bytes | bytearray) -> None:
+    async def async_send_switch_command(self, payload: bytes | bytearray, switch_state: bool | None = None) -> None:
         """Send a switch command via the session manager."""
         if not self._session.is_authenticated:
             _LOGGER.warning("Cannot send switch command: not authenticated")
             return
         try:
-            await self._session.async_write_command(payload, is_switch=True)
+            await self._session.async_write_command(payload, switch_state=switch_state)
         except BleakError as err:
             _LOGGER.warning("Switch command failed: %s", err)
 
