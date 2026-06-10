@@ -9,14 +9,9 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import VoltcraftDataUpdateCoordinator
 
-# Reset PIN payload: 0F 0C 17 00 02 00 00 00 00 00 00 00 00 [CHECKSUM] FF FF
-_RESET_PIN_PAYLOAD = bytes([
-    0x0F, 0x0C, 0x17, 0x00, 0x02,
-    0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00,
-    0x18,
-    0xFF, 0xFF,
-])
+# Reset PIN payload (verified via HCI log):
+# 0F 0C 17 00 02 00 00 00 00 00 00 00 00 1A FF FF
+_RESET_PIN_PAYLOAD = bytes.fromhex("0f0c17000200000000000000001affff")
 
 
 async def async_setup_entry(
@@ -75,12 +70,32 @@ class ResetPinButtonEntity(_LedButtonBase):
         self._attr_name = "Reset PIN to 0000"
 
     async def async_press(self) -> None:
+        import asyncio
         session = self.coordinator.session
         if not session.is_connected or not session.is_authenticated:
             return
-        await session.async_write_command(_RESET_PIN_PAYLOAD)
-        # After reset, update stored PIN and live session
-        entry = self.coordinator.config_entry
-        new_data = {**entry.data, "pin": "0000"}
-        self.hass.config_entries.async_update_entry(entry, data=new_data)
-        session._pin = "0000"
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[str] = loop.create_future()
+        session._pending_change_pin_future = future
+
+        try:
+            await session.async_write_command(_RESET_PIN_PAYLOAD)
+            result = await asyncio.wait_for(future, timeout=5.0)
+        except asyncio.TimeoutError:
+            result = "timeout"
+        finally:
+            session._pending_change_pin_future = None
+
+        if result == "success":
+            # Update stored PIN and live session only on confirmed success
+            entry = self.hass.config_entries.async_get_entry(
+                self.coordinator.config_entry.entry_id
+            )
+            if entry:
+                new_data = {**entry.data, "pin": "0000"}
+                self.hass.config_entries.async_update_entry(entry, data=new_data)
+            session._pin = "0000"
+            session._authenticated = False
+            # Re-authenticate with new PIN
+            await session._authenticate()
