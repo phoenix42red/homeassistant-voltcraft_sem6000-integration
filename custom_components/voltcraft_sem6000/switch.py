@@ -45,16 +45,18 @@ class MainSwitchEntity(CoordinatorEntity[VoltcraftDataUpdateCoordinator], Switch
     def available(self) -> bool:
         return self.coordinator.session.is_connected and self.coordinator.data is not None
 
+    async def async_request_refresh(self) -> None:
+        """Block coordinator refresh while a switch command is pending confirmation."""
+        if self.coordinator.session._switch_pending_state is not None:
+            return
+        await super().async_request_refresh()
+
     async def async_turn_on(self, **kwargs: Any) -> None:
-        # Optimistic update: set state immediately, notify will confirm
-        if self.coordinator.session.notify_state.is_on is not None:
-            self.coordinator.session.notify_state.is_on = True
-            self.async_write_ha_state()
-        await self.coordinator.async_send_switch_command(SwitchModes.ON.build_payload())
+        self.coordinator.session.notify_state.is_on = True
+        self.async_write_ha_state()
+        await self.coordinator.async_send_switch_command(SwitchModes.ON.build_payload(), switch_state=True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        # Optimistic update: set state immediately, notify will confirm
-        if self.coordinator.session.notify_state.is_on is not None:
-            self.coordinator.session.notify_state.is_on = False
-            self.async_write_ha_state()
-        await self.coordinator.async_send_switch_command(SwitchModes.OFF.build_payload())
+        self.coordinator.session.notify_state.is_on = False
+        self.async_write_ha_state()
+        await self.coordinator.async_send_switch_command(SwitchModes.OFF.build_payload(), switch_state=False)
