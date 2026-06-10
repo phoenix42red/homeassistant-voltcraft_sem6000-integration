@@ -95,7 +95,7 @@ Once configured, the integration creates the following entities:
 
 ### Switch Entity
 
-- **Entity ID**: `switch.[device_mac_address]`
+- **Entity ID**: `switch.[homeassisant_device_name]_power_switch`
 - **Device Class**: Outlet
 - **Attributes**:
   - `is_on`: Current state of the outlet (true/false)
@@ -107,32 +107,32 @@ Once configured, the integration creates the following entities:
 
 All sensor values are updated every 5 seconds:
 
-- **Power** (`sensor.[device_mac_address]_power`)
+- **Power** (`sensor.[homeassisant_device_name]_power`)
   - Current power consumption in Watts (W)
   - Device Class: Power
   - State Class: Measurement
 
-- **Voltage** (`sensor.[device_mac_address]_voltage`)
+- **Voltage** (`sensor.[homeassisant_device_name]_voltage`)
   - Line voltage in Volts (V)
   - Device Class: Voltage
   - State Class: Measurement
 
-- **Current** (`sensor.[device_mac_address]_current`)
+- **Current** (`sensor.[homeassisant_device_name]_current`)
   - Current draw in Amperes (A)
   - Device Class: Current
   - State Class: Measurement
 
-- **Frequency** (`sensor.[device_mac_address]_frequency`)
+- **Frequency** (`sensor.[homeassisant_device_name]_frequency`)
   - Line frequency in Hertz (Hz)
   - Device Class: Frequency
   - State Class: Measurement
 
-- **Power Factor** (`sensor.[device_mac_address]_power_factor`)
+- **Power Factor** (`sensor.[homeassisant_device_name]_power_factor`)
   - Power factor (0.0-1.0, dimensionless)
   - Device Class: Power Factor
   - State Class: Measurement
 
-- **Total Energy** (`sensor.[device_mac_address]_energy`)
+- **Total Energy** (`sensor.[homeassisant_device_name]_total_energy`)
   - Cumulative energy consumption in kilowatt-hours (kWh)
   - Device Class: Energy
   - State Class: Total Increasing
