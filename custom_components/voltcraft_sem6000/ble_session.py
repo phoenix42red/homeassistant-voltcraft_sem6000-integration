@@ -100,7 +100,7 @@ class BLESessionManager:
 
         self._reconnect_task: asyncio.Task | None = None
         self._shutdown = False
-        self._switch_pending = False  # True while waiting for SwitchNotify to confirm
+        self._switch_pending_state: bool | None = None  # desired is_on while waiting for SwitchACK
 
     # ------------------------------------------------------------------
     # Public API
@@ -141,12 +141,12 @@ class BLESessionManager:
 
         await self._disconnect_client()
 
-    async def async_write_command(self, data: bytes | bytearray, is_switch: bool = False) -> None:
+    async def async_write_command(self, data: bytes | bytearray, switch_state: bool | None = None) -> None:
         """Write a GATT command. Raises BleakError if not connected."""
         if not self.is_connected:
             raise BleakError("Not connected")
-        if is_switch:
-            self._switch_pending = True
+        if switch_state is not None:
+            self._switch_pending_state = switch_state
         await self._client.write_gatt_char(COMMAND_UUID, data, response=False)
 
     # ------------------------------------------------------------------
@@ -270,14 +270,22 @@ class BLESessionManager:
         payload: ParsedNotifyPayload | None = NotifyPayload.from_payload(data)
 
         if isinstance(payload, MeasureNotifyPayload):
-            self.notify_state.update_from_measure(payload, skip_is_on=self._switch_pending)
+            if self._switch_pending_state is not None:
+                # Override is_on with our desired state until MEASURE confirms it
+                self.notify_state.update_from_measure(payload, skip_is_on=True)
+                self.notify_state.is_on = self._switch_pending_state
+                # Clear pending once MEASURE confirms the plug has switched
+                if payload.is_on == self._switch_pending_state:
+                    self._switch_pending_state = None
+            else:
+                self.notify_state.update_from_measure(payload, skip_is_on=False)
             self._fire_callbacks()
 
         elif isinstance(payload, SwitchNotifyPayload):
-            # SwitchNotify is authoritative — clear pending flag and update is_on
-            self._switch_pending = False
-            self.notify_state.is_on = payload.is_on
-            self._fire_callbacks()
+            # SwitchNotify is only an ACK — plug does not encode new state in response.
+            # Keep _switch_pending_state set so MEASURE-Notify continues to skip is_on
+            # until MEASURE confirms the new state matches what we sent.
+            pass
 
         else:
             _LOGGER.debug("Unknown notify payload: %s", data.hex())
