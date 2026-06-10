@@ -1,133 +1,390 @@
+"""
+BLESessionManager: owns the BLE connection lifecycle.
+
+Responsibilities:
+  - connect / reconnect (via bleak-retry-connector)
+  - PIN auth (idempotent: skipped when already authenticated)
+  - start_notify / stop_notify
+  - deliver parsed notify payloads to registered callbacks
+  - reconnect safety: back-off, max retries, disconnect detection
+
+NOT responsible for:
+  - HA coordinator logic
+  - polling (that's the coordinator's job)
+  - entity state (read from notify_state only)
+"""
+
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
-import voluptuous as vol
+from bleak import BleakClient, BleakGATTCharacteristic
+from bleak.exc import BleakError
+from bleak_retry_connector import establish_connection
 
-from homeassistant.const import CONF_MAC
-from homeassistant.helpers.device_registry import format_mac
-from homeassistant.components import onboarding
-from homeassistant.components.bluetooth import (
-    BluetoothServiceInfoBleak,
-    async_discovered_service_info,
+from homeassistant.components import bluetooth
+from homeassistant.core import HomeAssistant
+
+from .const import COMMAND_UUID, NOTIFY_UUID
+from .protocol import (
+    Command,
+    MeasureNotifyPayload,
+    NotifyPayload,
+    ParsedNotifyPayload,
+    SwitchNotifyPayload,
 )
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
-
-from .const import DOMAIN, DEVICE_NAME, SERVICE_UUID
-from .options_flow import VoltcraftOptionsFlow
 
 _LOGGER = logging.getLogger(__name__)
 
-CONF_PIN = "pin"
+RECONNECT_DELAY_BASE = 2.0   # seconds
+RECONNECT_DELAY_MAX = 30.0   # seconds
+RECONNECT_MAX_ATTEMPTS = 10  # 0 = unlimited
 
 
-class MainConfigFlow(ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+@dataclass
+class NotifyState:
+    """The single source of truth for device state, populated exclusively by notify handler."""
 
-    @staticmethod
-    def async_get_options_flow(config_entry: ConfigEntry) -> VoltcraftOptionsFlow:
-        return VoltcraftOptionsFlow(config_entry)
+    is_on: bool | None = None
+    power: float | None = None
+    voltage: float | None = None
+    current: float | None = None
+    frequency: int | None = None
+    power_factor: float | None = None
+    consumed_energy: float | None = None
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._discovered_devices: dict[str, str] = {}
-        self._mac_address: str | None = None
-        self._pin: str | None = None
+    def update_from_measure(self, payload: MeasureNotifyPayload, skip_is_on: bool = False) -> None:
+        power = payload.power / 1000.0
+        voltage = float(payload.voltage)
+        current = payload.current / 1000.0
+        apparent = voltage * current
 
-    async def async_step_bluetooth(
-        self, discovery_info: BluetoothServiceInfoBleak
-    ) -> ConfigFlowResult:
-        device_unique_id = format_mac(discovery_info.address)
-        await self.async_set_unique_id(device_unique_id)
-        self._abort_if_unique_id_configured()
+        if not skip_is_on:
+            self.is_on = payload.is_on
+        self.power = power
+        self.voltage = voltage
+        self.current = current
+        self.frequency = payload.frequency
+        self.power_factor = min(power / apparent, 1.0) if apparent > 0 else None
+        self.consumed_energy = payload.consumed_energy / 1000.0
 
-        self._mac_address = discovery_info.address
-        self._name = discovery_info.name
-        return await self.async_step_pin()
 
-    async def async_step_pin(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        if user_input is not None:
-            self._pin = user_input[CONF_PIN]
-            return await self.async_step_confirm()
+# Callback type: called whenever notify state changes
+NotifyCallback = Callable[[], None]
 
-        return self.async_show_form(
-            step_id="pin",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_PIN, default="0000"): vol.All(
-                        vol.Coerce(str),
-                        vol.Length(min=4, max=4),
-                    )
-                }
-            ),
-        )
 
-    async def async_step_confirm(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        if user_input is not None or not onboarding.async_is_onboarded(self.hass):
-            return self._create_entry()
+class BLESessionManager:
+    """Manages a single BLE session with reconnect and idempotent auth."""
 
-        self._set_confirm_only()
-        return self.async_show_form(
-            step_id="confirm",
-            description_placeholders={"name": self._name},
-        )
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        mac: str,
+        entry_id: str,
+        pin: str | None,
+    ) -> None:
+        self._hass = hass
+        self._mac = mac
+        self._entry_id = entry_id
+        self._pin = pin
 
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        if user_input is not None:
-            mac_address = user_input[CONF_MAC]
-            device_unique_id = format_mac(mac_address)
-            await self.async_set_unique_id(device_unique_id, raise_on_progress=False)
-            self._abort_if_unique_id_configured()
+        self._client: BleakClient | None = None
+        self._authenticated = False
+        self._notify_active = False
 
-            name = self._discovered_devices[mac_address]
-            self._name = name
-            self._mac_address = mac_address
+        self.notify_state = NotifyState()
+        self._callbacks: list[NotifyCallback] = []
 
-            return await self.async_step_pin()
+        self._reconnect_task: asyncio.Task | None = None
+        self._shutdown = False
+        self._switch_pending_state: bool | None = None  # desired is_on while waiting for SwitchACK
+        self._pending_change_pin_future: asyncio.Future[str] | None = None
 
-        current_addresses = self._async_current_ids()
-        for discovery_info in async_discovered_service_info(self.hass):
-            address = discovery_info.address
-            if address in current_addresses or address in self._discovered_devices:
-                continue
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
-            if SERVICE_UUID in discovery_info.service_uuids:
-                self._discovered_devices[address] = (
-                    f"{discovery_info.name} ({address})"
-                )
+    def register_callback(self, cb: NotifyCallback) -> None:
+        """Register a callback to be called on any notify state change."""
+        self._callbacks.append(cb)
 
-        if not self._discovered_devices:
-            return self.async_abort(reason="no_devices_found")
-
-        return self.async_show_form(
-            step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_MAC): vol.In(self._discovered_devices),
-                }
-            ),
-        )
+    def unregister_callback(self, cb: NotifyCallback) -> None:
+        self._callbacks.discard(cb) if hasattr(self._callbacks, "discard") else None
+        if cb in self._callbacks:
+            self._callbacks.remove(cb)
 
     @property
-    def _name(self) -> str:
-        return self.context["title_placeholders"]["name"] or DEVICE_NAME
+    def is_connected(self) -> bool:
+        return self._client is not None and self._client.is_connected
 
-    @_name.setter
-    def _name(self, name: str) -> None:
-        self.context["title_placeholders"] = {"name": name}
+    @property
+    def is_authenticated(self) -> bool:
+        return self._authenticated
 
-    def _create_entry(self) -> ConfigFlowResult:
-        return self.async_create_entry(
-            title=self._name,
-            data={
-                CONF_MAC: self._mac_address,
-                CONF_PIN: self._pin,
-            },
+    async def async_start(self) -> None:
+        """Initial connect + auth. Called once from __init__.py."""
+        self._shutdown = False
+        await self._connect_and_setup()
+
+    async def async_stop(self) -> None:
+        """Clean shutdown."""
+        self._shutdown = True
+
+        if self._reconnect_task and not self._reconnect_task.done():
+            self._reconnect_task.cancel()
+            try:
+                await self._reconnect_task
+            except asyncio.CancelledError:
+                pass
+
+        await self._disconnect_client()
+
+    async def async_write_command(self, data: bytes | bytearray, switch_state: bool | None = None) -> None:
+        """Write a GATT command. Raises BleakError if not connected."""
+        if not self.is_connected:
+            raise BleakError("Not connected")
+        if switch_state is not None:
+            self._switch_pending_state = switch_state
+        await self._client.write_gatt_char(COMMAND_UUID, data, response=False)
+
+    # ------------------------------------------------------------------
+    # Internal: connect + setup
+    # ------------------------------------------------------------------
+
+    async def _connect_and_setup(self) -> None:
+        """Establish connection, start notify, authenticate."""
+        ble_device = bluetooth.async_ble_device_from_address(
+            self._hass, self._mac, connectable=True
         )
+        if not ble_device:
+            _LOGGER.warning("BLE device %s not found during connect", self._mac)
+            self._schedule_reconnect()
+            return
+
+        try:
+            _LOGGER.debug("Connecting to %s", self._mac)
+            self._client = await establish_connection(
+                BleakClient,
+                ble_device,
+                self._entry_id,
+                disconnected_callback=self._on_disconnected,
+            )
+        except (BleakError, Exception) as err:
+            _LOGGER.warning("Connect failed: %s", err)
+            self._client = None
+            self._schedule_reconnect()
+            return
+
+        await self._setup_session()
+
+    async def _setup_session(self) -> None:
+        """Start notify and authenticate on an already-connected client."""
+        assert self._client is not None
+
+        # Start notifications
+        if not self._notify_active:
+            try:
+                await self._client.start_notify(NOTIFY_UUID, self._handle_notify)
+                self._notify_active = True
+                _LOGGER.debug("Notifications started for %s", self._mac)
+            except BleakError as err:
+                _LOGGER.warning("start_notify failed: %s", err)
+                self._schedule_reconnect()
+                return
+
+        # Auth: idempotent — skipped if already authenticated
+        if not self._authenticated:
+            await self._authenticate()
+        else:
+            _LOGGER.debug("Already authenticated — skipping auth after reconnect")
+
+    # ------------------------------------------------------------------
+    # Internal: authentication
+    # ------------------------------------------------------------------
+
+    def _encode_pin(self, pin: str) -> bytes:
+        pin = str(pin).zfill(4)
+        return bytes(int(d) for d in pin)
+
+    async def _authenticate(self) -> None:
+        if not self._pin:
+            _LOGGER.debug("No PIN configured — skipping auth")
+            # Without PIN we consider auth "done"
+            self._authenticated = True
+            return
+
+        pin_bytes = self._encode_pin(self._pin)
+        payload = bytearray([
+            0x0F, 0x0C, 0x17, 0x00, 0x00,
+            *pin_bytes,
+            0x00, 0x00, 0x00, 0x00,
+            0x18 + sum(pin_bytes),
+            0xFF, 0xFF,
+        ])
+
+        loop = asyncio.get_running_loop()
+        auth_future: asyncio.Future[bool] = loop.create_future()
+
+        # Temporarily wire a one-shot auth result handler
+        self._pending_auth_future = auth_future
+
+        try:
+            await self._client.write_gatt_char(COMMAND_UUID, bytes(payload), response=False)
+            result = await asyncio.wait_for(auth_future, timeout=5.0)
+            if result:
+                _LOGGER.debug("AUTH SUCCESS for %s", self._mac)
+                self._authenticated = True
+            else:
+                _LOGGER.warning("AUTH FAILED (wrong PIN?) for %s", self._mac)
+                self._authenticated = False
+        except asyncio.TimeoutError:
+            _LOGGER.warning("AUTH TIMEOUT for %s", self._mac)
+            self._authenticated = False
+        finally:
+            self._pending_auth_future = None
+
+    # ------------------------------------------------------------------
+    # Internal: notify handler (single source of truth)
+    # ------------------------------------------------------------------
+
+    _pending_auth_future: asyncio.Future[bool] | None = None
+
+    async def _handle_notify(
+        self,
+        sender: BleakGATTCharacteristic,
+        data: bytearray,
+    ) -> None:
+        # --- Auth / PIN-change response (command 0x17) ---
+        if data.startswith(b"\x0F\x06\x17"):
+            sub = data[4]   # 0x00 = auth, 0x01 = change PIN, 0x02 = reset PIN
+            status = data[5] if len(data) > 5 else data[4]
+
+            if sub == 0x00:
+                # Auth response
+                success = data[4] == 0x00
+                if not success:
+                    _LOGGER.warning("Auth response: FAILED (status=0x%02X)", data[4])
+                if self._pending_auth_future and not self._pending_auth_future.done():
+                    self._pending_auth_future.set_result(success)
+
+            elif sub == 0x01:
+                # Change PIN response: data[5] = 0x00 success, else fail
+                success = data[5] == 0x00 if len(data) > 5 else False
+                result = "success" if success else "wrong_pin"
+                _LOGGER.debug("Change PIN response: %s", result)
+                if self._pending_change_pin_future and not self._pending_change_pin_future.done():
+                    self._pending_change_pin_future.set_result(result)
+
+            elif sub == 0x02:
+                # Reset PIN response
+                _LOGGER.debug("Reset PIN response: success=%s", data[5] == 0x00 if len(data) > 5 else "?")
+
+            return
+
+        # --- Parsed payload ---
+        payload: ParsedNotifyPayload | None = NotifyPayload.from_payload(data)
+
+        if isinstance(payload, MeasureNotifyPayload):
+            if self._switch_pending_state is not None:
+                # Override is_on with our desired state until MEASURE confirms it
+                self.notify_state.update_from_measure(payload, skip_is_on=True)
+                self.notify_state.is_on = self._switch_pending_state
+                # Clear pending once MEASURE confirms the plug has switched
+                if payload.is_on == self._switch_pending_state:
+                    self._switch_pending_state = None
+            else:
+                self.notify_state.update_from_measure(payload, skip_is_on=False)
+            self._fire_callbacks()
+
+        elif isinstance(payload, SwitchNotifyPayload):
+            # SwitchNotify is only an ACK — plug does not encode new state in response.
+            # Keep _switch_pending_state set so MEASURE-Notify continues to skip is_on
+            # until MEASURE confirms the new state matches what we sent.
+            pass
+
+        else:
+            _LOGGER.debug("Unknown notify payload: %s", data.hex())
+
+    def _fire_callbacks(self) -> None:
+        for cb in self._callbacks:
+            try:
+                cb()
+            except Exception:
+                _LOGGER.exception("Error in notify callback")
+
+    # ------------------------------------------------------------------
+    # Internal: disconnect handling + reconnect
+    # ------------------------------------------------------------------
+
+    def _on_disconnected(self, client: BleakClient) -> None:
+        """Called by Bleak on unexpected disconnect."""
+        _LOGGER.warning("BLE disconnected from %s", self._mac)
+        self._notify_active = False
+        # NOTE: do NOT reset self._authenticated here.
+        # The device keeps auth state across short disconnects.
+        # _authenticate() is idempotent anyway.
+        self._schedule_reconnect()
+
+    def _schedule_reconnect(self, attempt: int = 0) -> None:
+        if self._shutdown:
+            return
+        if self._reconnect_task and not self._reconnect_task.done():
+            return  # Already scheduled
+
+        self._reconnect_task = self._hass.loop.create_task(
+            self._reconnect_loop(attempt)
+        )
+
+    async def _reconnect_loop(self, start_attempt: int = 0) -> None:
+        attempt = start_attempt
+        delay = RECONNECT_DELAY_BASE
+
+        while not self._shutdown:
+            if RECONNECT_MAX_ATTEMPTS and attempt >= RECONNECT_MAX_ATTEMPTS:
+                _LOGGER.error(
+                    "Max reconnect attempts (%d) reached for %s",
+                    RECONNECT_MAX_ATTEMPTS,
+                    self._mac,
+                )
+                return
+
+            _LOGGER.info(
+                "Reconnect attempt %d/%s for %s in %.1fs",
+                attempt + 1,
+                RECONNECT_MAX_ATTEMPTS or "∞",
+                self._mac,
+                delay,
+            )
+
+            await asyncio.sleep(delay)
+
+            if self._shutdown:
+                return
+
+            await self._connect_and_setup()
+
+            if self.is_connected:
+                _LOGGER.info("Reconnected to %s after %d attempt(s)", self._mac, attempt + 1)
+                return
+
+            attempt += 1
+            delay = min(delay * 2, RECONNECT_DELAY_MAX)
+
+    async def _disconnect_client(self) -> None:
+        if self._client is None:
+            return
+        try:
+            if self._notify_active:
+                await self._client.stop_notify(NOTIFY_UUID)
+        except BleakError:
+            pass
+        try:
+            await self._client.disconnect()
+        except BleakError:
+            pass
+        self._client = None
+        self._notify_active = False
+        self._authenticated = False
