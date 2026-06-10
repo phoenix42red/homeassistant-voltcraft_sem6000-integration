@@ -1,5 +1,5 @@
 """
-Options Flow for Voltcraft SEM6000 / SPB012BLE.
+Options Flow for Voltcraft SEM6000.
 
 Allows changing the device PIN from HA Settings → Integration → Configure.
 On success: sends the change-PIN command, waits for ACK, saves new PIN to config entry.
