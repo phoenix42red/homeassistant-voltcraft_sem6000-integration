@@ -87,7 +87,7 @@ class VoltcraftDataUpdateCoordinator(DataUpdateCoordinator[NotifyState | None]):
             _LOGGER.warning("Cannot send switch command: not authenticated")
             return
         try:
-            await self._session.async_write_command(payload)
+            await self._session.async_write_command(payload, is_switch=True)
         except BleakError as err:
             _LOGGER.warning("Switch command failed: %s", err)
 
