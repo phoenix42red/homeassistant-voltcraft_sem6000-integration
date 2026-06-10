@@ -1,3 +1,29 @@
+"""
+Protocol definitions for Voltcraft SEM6000 / SPB012BLE devices.
+Reverse engineered by monitoring communication with an Android app using nRF Connect.
+Not all commands are implemented.
+
+Payload structure:
+- 0x0f * 1          : Header
+- 0xXX * 1          : Length
+- 0xXX * 1          : Command
+- 0x00 * 1          : ?
+- 0xXX * (length-3) : Params
+- 0xXX * 1          : Checksum
+- 0xFF * 2          : ? (part of the checksum??)
+
+MEASURE notification layout:
+  Byte 0       : is_on (bool)
+  Bytes 1-3    : power (3 bytes, big-endian, milliwatts)
+  Byte 4       : voltage (1 byte, volts)
+  Bytes 5-6    : current (2 bytes, big-endian, milliamps)
+  Byte 7       : frequency (1 byte, Hz)
+  Bytes 8-9    : unknown padding (NOT power_factor)
+  Bytes 10+    : consumed_energy (big-endian, Wh)
+                 14-byte payload (hw v2): 4 bytes
+                 12-byte payload (hw v3): 2 bytes
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -37,13 +63,6 @@ class NotifyPayload:
 
         params = body[0:-1]
 
-        # # The checksum always seems to be wrong...
-        # checksum = body[-1]
-        # checksumExpected = (1 + sum(list(params))) % 256
-        # if checksum != checksumExpected:
-        #     # Not a valid payload
-        #     return None
-
         command = params[0]
 
         arguments = params[2:]
@@ -82,9 +101,12 @@ class MeasureNotifyPayload(NotifyPayload):
 
 @dataclass(frozen=True)
 class SwitchNotifyPayload(NotifyPayload):
+    is_on: bool
+
     @staticmethod
     def from_data(data: bytearray) -> SwitchNotifyPayload:
-        return SwitchNotifyPayload()
+        # data[0]: new switch state (0x00 = off, 0x01 = on)
+        return SwitchNotifyPayload(is_on=bool(data[0]))
 
 
 ParsedNotifyPayload = SwitchNotifyPayload | MeasureNotifyPayload
