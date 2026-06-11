@@ -187,6 +187,9 @@ class BLESessionManager:
         # Start notifications
         if not self._notify_active:
             try:
+                # Small delay to ensure BlueZ has fully resolved GATT services
+                # before calling start_notify — avoids UnknownObject DBus errors
+                await asyncio.sleep(0.5)
                 await self._client.start_notify(NOTIFY_UUID, self._handle_notify)
                 self._notify_active = True
                 _LOGGER.debug("Notifications started for %s", self._mac)
